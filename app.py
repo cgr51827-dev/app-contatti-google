@@ -76,8 +76,17 @@ def normalize_phone(value) -> str:
 
 
 def build_contacts(excel_bytes: bytes) -> pd.DataFrame:
-    dati = pd.read_excel(excel_bytes, sheet_name="Dati", dtype=str)
-    recapiti = pd.read_excel(excel_bytes, sheet_name="Recapiti", dtype=str)
+    excel_file = io.BytesIO(excel_bytes)
+
+try:
+    dati = pd.read_excel(excel_file, sheet_name="Dati", dtype=str, engine="openpyxl")
+    excel_file.seek(0)
+    recapiti = pd.read_excel(excel_file, sheet_name="Recapiti", dtype=str, engine="openpyxl")
+except Exception:
+    excel_file.seek(0)
+    dati = pd.read_excel(excel_file, sheet_name="Dati", dtype=str, engine="xlrd")
+    excel_file.seek(0)
+    recapiti = pd.read_excel(excel_file, sheet_name="Recapiti", dtype=str, engine="xlrd")
 
     expected_dati = ["CODICE", "COD. ESTERNO", "DEBITORE", "LOTTO"]
     expected_recapiti = ["PRATICA"]
