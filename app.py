@@ -1,11 +1,64 @@
 import io
 import re
+import hmac
 from typing import List
 
 import pandas as pd
 import streamlit as st
 
 st.set_page_config(page_title="Excel to Contatti", page_icon="📇")
+
+
+def check_credentials(username: str, password: str) -> bool:
+    users = st.secrets["auth"]["users"]
+
+    if username not in users:
+        return False
+
+    return hmac.compare_digest(password, users[username])
+
+
+def do_logout():
+    st.session_state.authenticated = False
+    st.session_state.username = None
+    st.rerun()
+
+
+def login_block():
+    st.title("🔐 Accesso riservato")
+    st.write("Inserisci username e password per accedere all'app.")
+
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Accedi")
+
+    if submitted:
+        if check_credentials(username, password):
+            st.session_state.authenticated = True
+            st.session_state.username = username
+            st.rerun()
+        else:
+            st.error("Username o password non corretti")
+
+
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if "username" not in st.session_state:
+    st.session_state.username = None
+
+
+if not st.session_state.authenticated:
+    login_block()
+    st.stop()
+
+
+st.sidebar.success(f"Connesso come: {st.session_state.username}")
+
+if st.sidebar.button("Logout"):
+    do_logout()
+
 
 st.title("📇 Excel → Excel Contatti")
 
