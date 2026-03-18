@@ -7,8 +7,7 @@ import streamlit as st
 
 st.set_page_config(page_title="Excel to Contatti", page_icon="📇")
 
-st.title("📇 Excel → CSV Contatti")
-
+st.title("📇 Excel → Excel Contatti")
 
 OUTPUT_COLUMNS = ["NOME", "TELEFONO"]
 
@@ -98,7 +97,6 @@ def build_contacts(file_bytes):
     recapiti = recapiti.copy()
     dati = dati.copy()
 
-    # colonne Excel fisiche G, H, I, N
     recapiti["TEL_G"] = recapiti.iloc[:, 6]
     recapiti["TEL_H"] = recapiti.iloc[:, 7]
     recapiti["TEL_I"] = recapiti.iloc[:, 8]
@@ -146,12 +144,20 @@ def build_contacts(file_bytes):
     if output.empty:
         return output
 
-    output = output.drop_duplicates(subset=OUTPUT_COLUMNS, keep="first").reset_index(drop=True)
-    return output
+    return output.drop_duplicates(subset=OUTPUT_COLUMNS, keep="first").reset_index(drop=True)
 
 
-def to_csv_bytes(df):
-    return df.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
+def to_excel_bytes(df):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Contatti")
+        ws = writer.sheets["Contatti"]
+        ws.column_dimensions["A"].width = 50
+        ws.column_dimensions["B"].width = 22
+        for cell in ws["B"][1:]:
+            cell.number_format = "@"
+    output.seek(0)
+    return output.getvalue()
 
 
 uploaded_file = st.file_uploader("Carica file Excel (.xls, .xlsx)", type=["xls", "xlsx"])
@@ -164,13 +170,14 @@ if uploaded_file is not None:
         st.dataframe(output_df, use_container_width=True)
 
         st.download_button(
-            label="Scarica CSV",
-            data=to_csv_bytes(output_df),
-            file_name="contatti.csv",
-            mime="text/csv",
+            label="Scarica Excel",
+            data=to_excel_bytes(output_df),
+            file_name="contatti.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
     except Exception as e:
         st.error(f"Errore: {e}")
 else:
     st.info("Carica un file Excel.")
+
