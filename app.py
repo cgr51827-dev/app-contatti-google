@@ -1,6 +1,5 @@
 import io
 import re
-import zipfile
 from typing import List
 
 import pandas as pd
@@ -44,30 +43,22 @@ def format_name(cod_esterno, debitore, lotto) -> str:
 
 
 def normalize_phone(value) -> str:
-    """
-    Mantiene gli zeri iniziali e ripulisce valori tipici Excel.
-    """
     text = clean_text(value)
     if not text:
         return ""
 
-    # Rimuove apostrofo iniziale usato spesso in Excel per forzare testo
     if text.startswith("'"):
         text = text[1:].strip()
 
-    # Se Excel ha convertito in float intero tipo 0039... -> 3.9E+11 o 12345.0
-    # tentiamo una normalizzazione conservativa.
     sci_match = re.fullmatch(r"[-+]?\d+(?:\.\d+)?[eE][-+]?\d+", text)
     if sci_match:
         try:
-            as_int = format(float(text), ".0f")
-            text = as_int
+            text = format(float(text), ".0f")
         except Exception:
             pass
     elif re.fullmatch(r"\d+\.0+", text):
         text = text.split(".")[0]
 
-    # Teniamo solo spazi, + e cifre; rimuoviamo separatori comuni
     text = text.replace("\u00a0", " ")
     text = re.sub(r"[()\-./]", "", text)
     text = re.sub(r"\s+", "", text)
@@ -78,15 +69,16 @@ def normalize_phone(value) -> str:
 def build_contacts(excel_bytes: bytes) -> pd.DataFrame:
     excel_file = io.BytesIO(excel_bytes)
 
-try:
-    dati = pd.read_excel(excel_file, sheet_name="Dati", dtype=str, engine="openpyxl")
-    excel_file.seek(0)
-    recapiti = pd.read_excel(excel_file, sheet_name="Recapiti", dtype=str, engine="openpyxl")
-except Exception:
-    excel_file.seek(0)
-    dati = pd.read_excel(excel_file, sheet_name="Dati", dtype=str, engine="xlrd")
-    excel_file.seek(0)
-    recapiti = pd.read_excel(excel_file, sheet_name="Recapiti", dtype=str, engine="xlrd")
+    # supporto xlsx e xls
+    try:
+        dati = pd.read_excel(excel_file, sheet_name="Dati", dtype=str, engine="openpyxl")
+        excel_file.seek(0)
+        recapiti = pd.read_excel(excel_file, sheet_name="Recapiti", dtype=str, engine="openpyxl")
+    except Exception:
+        excel_file.seek(0)
+        dati = pd.read_excel(excel_file, sheet_name="Dati", dtype=str, engine="xlrd")
+        excel_file.seek(0)
+        recapiti = pd.read_excel(excel_file, sheet_name="Recapiti", dtype=str, engine="xlrd")
 
     expected_dati = ["CODICE", "COD. ESTERNO", "DEBITORE", "LOTTO"]
     expected_recapiti = ["PRATICA"]
@@ -96,16 +88,11 @@ except Exception:
     missing_phone_cols = [c for c in RECAPITI_COLUMNS if c not in recapiti.columns]
 
     if missing_dati:
-        raise ValueError(f"Nel foglio 'Dati' mancano le colonne: {', '.join(missing_dati)}")
+        raise ValueError(f"Nel foglio 'Dati' mancano: {', '.join(missing_dati)}")
     if missing_recapiti:
-        raise ValueError(f"Nel foglio 'Recapiti' mancano le colonne: {', '.join(missing_recapiti)}")
+        raise ValueError(f"Nel foglio 'Recapiti' mancano: {', '.join(missing_recapiti)}")
     if missing_phone_cols:
-        raise ValueError(
-            "Nel foglio 'Recapiti' mancano le colonne numeri richieste: " + ", ".join(missing_phone_cols)
-        )
-
-    dati = dati.copy()
-    recapiti = recapiti.copy()
+        raise ValueError(f"Mancano colonne numeri: {', '.join(missing_phone_cols)}")
 
     dati["CODICE_KEY"] = dati["CODICE"].map(normalize_key)
     recapiti["PRATICA_KEY"] = recapiti["PRATICA"].map(normalize_key)
@@ -137,7 +124,6 @@ except Exception:
             if phone:
                 phones.append(phone)
 
-        # no duplicati all'interno della singola pratica/nome
         phones = list(dict.fromkeys(phones))
 
         for idx, phone in enumerate(phones, start=1):
@@ -153,9 +139,7 @@ except Exception:
     if output.empty:
         return output
 
-    # no duplicati globali esatti
-    output = output.drop_duplicates(subset=OUTPUT_COLUMNS, keep="first").reset_index(drop=True)
-    return output
+    return output.drop_duplicates().reset_index(drop=True)
 
 
 def to_csv_bytes(df: pd.DataFrame) -> bytes:
@@ -164,35 +148,21 @@ def to_csv_bytes(df: pd.DataFrame) -> bytes:
 
 uploaded_file = st.file_uploader("Carica file Excel (.xls, .xlsx)", type=["xls", "xlsx"])
 
-with st.expander("Regole applicate", expanded=False):
-    st.markdown(
-        """
-- Join tra **Dati.CODICE** e **Recapiti.PRATICA**
-- Nome contatto: **COD. ESTERNO - DEBITORELOTTO**
-- Una riga per ogni numero trovato nelle colonne **G, H, I, N**
-- Suffisso automatico **n.1, n.2, ...**
-- Output CSV con colonne **Name** e **Phone 1 - Value**
-- Rimozione duplicati
-- Lettura dei numeri come testo per non perdere gli zeri iniziali
-        """
-    )
-
 if uploaded_file is not None:
     try:
         file_bytes = uploaded_file.getvalue()
         output_df = build_contacts(file_bytes)
 
         st.success(f"CSV generato con {len(output_df)} righe.")
-        st.dataframe(output_df, use_container_width=True)
+        st.dataframe(output_df)
 
-        csv_bytes = to_csv_bytes(output_df)
         st.download_button(
             label="Scarica CSV",
-            data=csv_bytes,
+            data=to_csv_bytes(output_df),
             file_name="google_contacts.csv",
             mime="text/csv",
         )
     except Exception as e:
-        st.error(f"Errore durante l'elaborazione: {e}")
+        st.error(f"Errore: {e}")
 else:
-    st.info("Carica un file per generare il CSV.")
+    st.info("Carica un file Excel per generare il CSV.")
