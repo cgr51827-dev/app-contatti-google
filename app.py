@@ -12,8 +12,11 @@ st.write(
     "Carica un file Excel con i fogli **Dati** e **Recapiti** per generare un CSV compatibile con Google Contacts."
 )
 
-RECAPITI_COLUMNS = ["G", "H", "I", "N"]
 OUTPUT_COLUMNS = ["Name", "Phone 1 - Value"]
+
+# Colonne Excel fisiche del foglio Recapiti:
+# G=6, H=7, I=8, N=13 in indice zero-based
+PHONE_COLUMN_INDEXES = [6, 7, 8, 13]
 
 
 def clean_text(value) -> str:
@@ -66,10 +69,9 @@ def normalize_phone(value) -> str:
     return text
 
 
-def build_contacts(excel_bytes: bytes) -> pd.DataFrame:
+def read_excel_sheets(excel_bytes: bytes):
     excel_file = io.BytesIO(excel_bytes)
 
-    # supporto xlsx e xls
     try:
         dati = pd.read_excel(excel_file, sheet_name="Dati", dtype=str, engine="openpyxl")
         excel_file.seek(0)
@@ -80,19 +82,39 @@ def build_contacts(excel_bytes: bytes) -> pd.DataFrame:
         excel_file.seek(0)
         recapiti = pd.read_excel(excel_file, sheet_name="Recapiti", dtype=str, engine="xlrd")
 
+    return dati, recapiti
+
+
+def build_contacts(excel_bytes: bytes) -> pd.DataFrame:
+    dati, recapiti = read_excel_sheets(excel_bytes)
+
     expected_dati = ["CODICE", "COD. ESTERNO", "DEBITORE", "LOTTO"]
     expected_recapiti = ["PRATICA"]
 
     missing_dati = [c for c in expected_dati if c not in dati.columns]
     missing_recapiti = [c for c in expected_recapiti if c not in recapiti.columns]
-    missing_phone_cols = [c for c in RECAPITI_COLUMNS if c not in recapiti.columns]
 
     if missing_dati:
         raise ValueError(f"Nel foglio 'Dati' mancano: {', '.join(missing_dati)}")
     if missing_recapiti:
-        raise ValueError(f"Nel foglio 'Recapiti' mancano: {', '.join(missing_recapiti)}")
-    if missing_phone_cols:
-        raise ValueError(f"Mancano colonne numeri: {', '.join(missing_phone_cols)}")
+        raise ValueError(f"Nel foglio 'Recapiti' manca: {', '.join(missing_recapiti)}")
+
+    max_idx = recapiti.shape[1] - 1
+    invalid_indexes = [i for i in PHONE_COLUMN_INDEXES if i > max_idx]
+    if invalid_indexes:
+        raise ValueError(
+            "Il foglio 'Recapiti' non ha abbastanza colonne per leggere G, H, I, N."
+        )
+
+    recapiti = recapiti.copy()
+    dati = dati.copy()
+
+    recapiti["PHONE_G"] = recapiti.iloc[:, 6]
+    recapiti["PHONE_H"] = recapiti.iloc[:, 7]
+    recapiti["PHONE_I"] = recapiti.iloc[:, 8]
+    recapiti["PHONE_N"] = recapiti.iloc[:, 13]
+
+    phone_columns = ["PHONE_G", "PHONE_H", "PHONE_I", "PHONE_N"]
 
     dati["CODICE_KEY"] = dati["CODICE"].map(normalize_key)
     recapiti["PRATICA_KEY"] = recapiti["PRATICA"].map(normalize_key)
@@ -108,7 +130,8 @@ def build_contacts(excel_bytes: bytes) -> pd.DataFrame:
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
 
     merged["BASE_NAME"] = merged.apply(
-        lambda row: format_name(row["COD. ESTERNO"], row["DEBITORE"], row["LOTTO"]), axis=1
+        lambda row: format_name(row["COD. ESTERNO"], row["DEBITORE"], row["LOTTO"]),
+        axis=1,
     )
 
     rows: List[dict] = []
@@ -119,7 +142,7 @@ def build_contacts(excel_bytes: bytes) -> pd.DataFrame:
             continue
 
         phones = []
-        for col in RECAPITI_COLUMNS:
+        for col in phone_columns:
             phone = normalize_phone(row.get(col, ""))
             if phone:
                 phones.append(phone)
@@ -139,7 +162,7 @@ def build_contacts(excel_bytes: bytes) -> pd.DataFrame:
     if output.empty:
         return output
 
-    return output.drop_duplicates().reset_index(drop=True)
+    return output.drop_duplicates(subset=OUTPUT_COLUMNS, keep="first").reset_index(drop=True)
 
 
 def to_csv_bytes(df: pd.DataFrame) -> bytes:
@@ -148,13 +171,26 @@ def to_csv_bytes(df: pd.DataFrame) -> bytes:
 
 uploaded_file = st.file_uploader("Carica file Excel (.xls, .xlsx)", type=["xls", "xlsx"])
 
+with st.expander("Regole applicate", expanded=False):
+    st.markdown(
+        """
+- Join tra **Dati.CODICE** e **Recapiti.PRATICA**
+- Nome contatto: **COD. ESTERNO - DEBITORELOTTO**
+- Una riga per ogni numero trovato nelle colonne Excel **G, H, I, N**
+- Suffisso automatico **n.1, n.2, ...**
+- Output CSV con colonne **Name** e **Phone 1 - Value**
+- Rimozione duplicati
+- Lettura dei numeri come testo per non perdere gli zeri iniziali
+        """
+    )
+
 if uploaded_file is not None:
     try:
         file_bytes = uploaded_file.getvalue()
         output_df = build_contacts(file_bytes)
 
         st.success(f"CSV generato con {len(output_df)} righe.")
-        st.dataframe(output_df)
+        st.dataframe(output_df, use_container_width=True)
 
         st.download_button(
             label="Scarica CSV",
@@ -162,6 +198,10 @@ if uploaded_file is not None:
             file_name="google_contacts.csv",
             mime="text/csv",
         )
+    except Exception as e:
+        st.error(f"Errore: {e}")
+else:
+    st.info("Carica un file Excel per generare il CSV.")
     except Exception as e:
         st.error(f"Errore: {e}")
 else:
